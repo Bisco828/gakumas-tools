@@ -7,20 +7,20 @@ import { loadoutFromQuery, silenceConsole } from "../tests/lib.mjs";
 // キャラごとの得意属性順 [得意1位, 得意2位, 得意3位]
 // 必要に応じて並び替え・新キャラ追加してください
 const IDOL_AFFINITY = {
-  花海咲季: ["vo", "da", "vi"],
-  月村手毬: ["vo", "vi", "da"],
+  花海咲季: ["vi", "da", "vo"],
+  月村手毬: ["vo", "da", "vi"],
   藤田ことね: ["da", "vi", "vo"],
-  有村麻央: ["da", "vi", "vo"],
-  葛城リーリヤ: ["vi", "vo", "da"],
-  倉本千奈: ["vi", "da", "vo"],
+  雨夜燕: ["da", "vo", "vi"],
+  有村麻央: ["vo", "vi", "da"],
+  葛城リーリヤ: ["vi", "da", "vo"],
+  倉本千奈: ["da", "vi", "vo"],
   紫雲清夏: ["da", "vi", "vo"],
-  篠澤広: ["vi", "da", "vo"],
-  姫崎莉波: ["vo", "vi", "da"],
+  篠澤広: ["vo", "da", "vi"],
+  十王星南: ["vi", "vo", "da"],
+  秦谷美鈴: ["vo", "vi", "da"],
   花海佑芽: ["da", "vo", "vi"],
-  十王星南: ["vo", "vi", "da"],
-  秦谷美鈴: ["vi", "vo", "da"],
-  雨夜燕: ["vo", "da", "vi"],
-  氷渡香名江: ["vo", "da", "vi"],
+  姫崎莉波: ["vi", "da", "vo"],
+  氷渡香名江: ["vo", "vi", "da"], 
 };
 
 const allCards = SkillCards.getAll();
