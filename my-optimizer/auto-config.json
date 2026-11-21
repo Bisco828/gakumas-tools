@@ -1,6 +1,7 @@
 {
   "stageIds": [193, 194, 195],
   "targetStage": "all",
+  "paramMode": "idol",
   "params": [3200, 2400, 1400, 52],
   "supportBonus": 0.10,
   "pIdolIds": "auto",

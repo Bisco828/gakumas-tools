@@ -4,6 +4,25 @@ import { Stages, SkillCards, PItems, PIdols, Idols, Customizations } from "gakum
 import { createSimulation } from "@/simulator";
 import { loadoutFromQuery, silenceConsole } from "../tests/lib.mjs";
 
+// キャラごとの得意属性順 [得意1位, 得意2位, 得意3位]
+// 必要に応じて並び替え・新キャラ追加してください
+const IDOL_AFFINITY = {
+  花海咲季: ["vo", "da", "vi"],
+  月村手毬: ["vo", "vi", "da"],
+  藤田ことね: ["da", "vi", "vo"],
+  有村麻央: ["da", "vi", "vo"],
+  葛城リーリヤ: ["vi", "vo", "da"],
+  倉本千奈: ["vi", "da", "vo"],
+  紫雲清夏: ["da", "vi", "vo"],
+  篠澤広: ["vi", "da", "vo"],
+  姫崎莉波: ["vo", "vi", "da"],
+  花海佑芽: ["da", "vo", "vi"],
+  十王星南: ["vo", "vi", "da"],
+  秦谷美鈴: ["vi", "vo", "da"],
+  雨夜燕: ["vo", "da", "vi"],
+  氷渡香名江: ["vo", "da", "vi"],
+};
+
 const allCards = SkillCards.getAll();
 const allItems = PItems.getAll();
 const allCustoms = Customizations.getAll();
@@ -13,6 +32,24 @@ const idolById = new Map(Idols.getAll().map((i) => [i.id, i]));
 const customById = new Map(allCustoms.map((c) => [String(c.id), c]));
 
 const randPick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+// キャラの得意属性に合わせて [Vo, Da, Vi, 体力] を組み立てる
+function buildParamsForIdol(idolName, baseParams, paramMode) {
+  if (paramMode !== "idol") return [...baseParams];
+  const key = (idolName || "").replace(/\s+/g, "");
+  const order = IDOL_AFFINITY[key] || ["vo", "da", "vi"];
+  const mapped = { vo: baseParams[0], da: baseParams[1], vi: baseParams[2] };
+  mapped[order[0]] = baseParams[0];
+  mapped[order[1]] = baseParams[1];
+  mapped[order[2]] = baseParams[2];
+  return [mapped.vo, mapped.da, mapped.vi, baseParams[3]];
+}
+
+function withIdolParams(baseLoadout, idolName, baseParams, paramMode) {
+  const clone = structuredClone(baseLoadout);
+  clone.params = buildParamsForIdol(idolName, baseParams, paramMode);
+  return clone;
+}
 
 async function evaluate(loadout, runs) {
   const restore = silenceConsole();
@@ -198,7 +235,7 @@ function formatCardWithCustom(cardId, customObj) {
 }
 
 // 全SSR（または所持SSRのみ）から予選で上位N人を自動選出する
-async function selectTopSSR(stage, baseLoadout, topN, includeR, onlyOwned) {
+async function selectTopSSR(stage, baseLoadout, topN, includeR, onlyOwned, baseParams, paramMode) {
   const stagePlan = stage?.plan && stage.plan !== "free" ? stage.plan : null;
 
   let ownedSet = null;
@@ -242,16 +279,18 @@ async function selectTopSSR(stage, baseLoadout, topN, includeR, onlyOwned) {
     planTemplates.set(plan, template);
   }
 
-  // 対象SSRの固有カード＆固有Pアイテムをベースに当てはめて一斉評価
+  // 対象SSRの固有カード＆固有Pアイテム＋得意属性ステで一斉評価
   const prelim = [];
   for (const pIdol of candidates) {
+    const idolName = idolById.get(pIdol.idolId)?.name || "";
+    const idolLoadout = withIdolParams(baseLoadout, idolName, baseParams, paramMode);
     const template = planTemplates.get(pIdol.plan);
     const { ownCard, ownItem } = getOwnAssets(pIdol);
     const state = structuredClone(template);
     if (ownItem) state.items[0] = ownItem.id;
     if (ownCard) state.cards[0] = ownCard.id;
 
-    const score = (await evaluate(toLoadout(baseLoadout, state), 30)).avg;
+    const score = (await evaluate(toLoadout(idolLoadout, state), 30)).avg;
     prelim.push({ pIdol, score, initState: state });
   }
 
@@ -275,8 +314,9 @@ async function runForStage(stageId, stageLabel, cfg) {
     return null;
   }
 
+  const paramMode = cfg.paramMode || "fixed";
   console.log("\n########################################################");
-  console.log(`  ${stageLabel} (ID: ${stageId} / プラン: ${stage.plan || "free"})`);
+  console.log(`  ${stageLabel} (ID: ${stageId} / プラン: ${stage.plan || "free"} / ステ割当: ${paramMode})`);
   console.log("########################################################");
 
   const baseQuery = `stage=${stageId}&support_bonus=${cfg.supportBonus}&params=${cfg.params.join("-")}`;
@@ -294,7 +334,7 @@ async function runForStage(stageId, stageLabel, cfg) {
     const topN = cfg.onlyOwned
       ? (cfg.autoTopNOwned ?? 5)
       : (cfg.autoTopNAll ?? 8);
-    targetEntries = await selectTopSSR(stage, baseLoadout, topN, includeR, cfg.onlyOwned);
+    targetEntries = await selectTopSSR(stage, baseLoadout, topN, includeR, cfg.onlyOwned, cfg.params, paramMode);
   } else {
     targetEntries = cfg.pIdolIds
       .map((id) => ({ pIdol: PIdols.getById(id), initState: null }))
@@ -304,14 +344,16 @@ async function runForStage(stageId, stageLabel, cfg) {
   for (const { pIdol, initState: presetState } of targetEntries) {
     const idolName = idolById.get(pIdol.idolId)?.name || `Idol#${pIdol.idolId}`;
     const label = `${idolName}【${pIdol.title}】(${pIdol.plan})`;
+    const idolLoadout = withIdolParams(baseLoadout, idolName, cfg.params, paramMode);
+    const [vo, da, vi] = idolLoadout.params;
 
     const { ownCard, ownItem } = getOwnAssets(pIdol);
     const { cardPool, itemPool } = buildPlanPools(pIdol.plan, includeR);
-    console.log(`\n▶ 本選ガチ探索: ${label}`);
+    console.log(`\n▶ 本選ガチ探索: ${label} [Vo:${vo} / Da:${da} / Vi:${vi}]`);
 
     const startState = presetState || createInitialState(ownCard, ownItem, cardPool, itemPool);
     const deckOptimized = await optimizeDeck(
-      baseLoadout,
+      idolLoadout,
       startState,
       !!ownCard,
       !!ownItem,
@@ -321,15 +363,16 @@ async function runForStage(stageId, stageLabel, cfg) {
       fastRuns
     );
     const fullOptimized = await optimizeCustomizations(
-      baseLoadout,
+      idolLoadout,
       deckOptimized,
       maxCustomPerCard,
       fastRuns
     );
 
-    const finalStats = await evaluate(toLoadout(baseLoadout, fullOptimized), finalRuns);
+    const finalStats = await evaluate(toLoadout(idolLoadout, fullOptimized), finalRuns);
     summary.push({
       キャラ: label,
+      ステ: `${vo}/${da}/${vi}`,
       平均スコア: finalStats.avg,
       下振れ20: finalStats.p20,
       上振れ90: finalStats.p90,
@@ -353,6 +396,7 @@ async function runForStage(stageId, stageLabel, cfg) {
   console.table(
     summary.map((s) => ({
       キャラ: s.キャラ,
+      "Vo/Da/Vi": s.ステ,
       平均スコア: s.平均スコア,
       "下振れ(20%)": s.下振れ20,
       "上振れ(90%)": s.上振れ90,
@@ -362,7 +406,7 @@ async function runForStage(stageId, stageLabel, cfg) {
 
   console.log(`\n--- ${stageLabel} の最適デッキ＆カスタム詳細 ---`);
   summary.forEach((s, i) => {
-    console.log(`\n[${i + 1}位] ${s.キャラ} (平均: ${s.平均スコア} / 下振れ: ${s.下振れ20})`);
+    console.log(`\n[${i + 1}位] ${s.キャラ} [Vo/Da/Vi: ${s.ステ}] (平均: ${s.平均スコア} / 下振れ: ${s.下振れ20})`);
     console.log(`  Pアイテム: ${s.最適Pアイテム}`);
     console.log(`  メイン   : [${s.メイン}]`);
     console.log(`  サブ     : [${s.サブ}]`);
