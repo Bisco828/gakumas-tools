@@ -4,8 +4,7 @@ import { Stages, SkillCards, PItems, PIdols, Idols, Customizations } from "gakum
 import { createSimulation } from "@/simulator";
 import { loadoutFromQuery, silenceConsole } from "../tests/lib.mjs";
 
-// キャラごとの得意属性順 [得意1位, 得意2位, 得意3位]
-// 必要に応じて並び替え・新キャラ追加してください
+// キャラごとの得意属性順 [流1, 流2, 流3]
 const IDOL_AFFINITY = {
   花海咲季: ["vi", "da", "vo"],
   月村手毬: ["vo", "da", "vi"],
@@ -20,7 +19,7 @@ const IDOL_AFFINITY = {
   秦谷美鈴: ["vo", "vi", "da"],
   花海佑芽: ["da", "vo", "vi"],
   姫崎莉波: ["vi", "da", "vo"],
-  氷渡香名江: ["vo", "vi", "da"], 
+  氷渡香名江: ["vo", "da", "vi"], // ※必要に応じて流1→流2→流3に合わせて変更
 };
 
 const allCards = SkillCards.getAll();
@@ -78,6 +77,7 @@ function getOwnAssets(pIdol) {
   const ownCard =
     allCards.find((c) => c.pIdolId === pIdol.id && c.upgraded) ||
     allCards.find((c) => c.pIdolId === pIdol.id);
+  // 固有Pアイテムは未強化を優先
   const ownItem =
     allItems.find((p) => p.pIdolId === pIdol.id && !p.upgraded) ||
     allItems.find((p) => p.pIdolId === pIdol.id);
@@ -94,12 +94,14 @@ function buildPlanPools(plan, includeR) {
       c.sourceType !== "default" &&
       allowedRarities.includes(c.rarity)
   );
+  // 汎用Pアイテムも未強化のみ
   const itemPool = allItems.filter(
     (p) =>
       p.mode === "stage" &&
       (p.plan === plan || p.plan === "free") &&
       p.pIdolId === null &&
-      p.rarity !== "N"
+      p.rarity !== "N" &&
+      !p.upgraded
   );
   return { cardPool, itemPool };
 }
@@ -178,38 +180,45 @@ async function optimizeDeck(baseLoadout, state, hasOwnCard, hasOwnItem, cardPool
   return current;
 }
 
-async function optimizeCustomizations(baseLoadout, state, maxCustomPerCard, fastRuns) {
-  if (maxCustomPerCard <= 0) return state;
+async function optimizeCustomizations(baseLoadout, state, maxCustomPerGroup, fastRuns) {
+  if (maxCustomPerGroup <= 0) return state;
 
   let current = structuredClone(state);
   let currentScore = (await evaluate(toLoadout(baseLoadout, current), fastRuns)).avg;
 
-  for (let slot = 0; slot < 12; slot++) {
-    const card = cardById.get(current.cards[slot]);
-    const avail = card?.availableCustomizations || [];
-    if (avail.length === 0) continue;
+  // メイン(0〜5)とサブ(6〜11)それぞれで、スコアが最も伸びるカスタムを最大 maxCustomPerGroup 個選ぶ
+  const groups = [
+    { name: "メイン", slots: [0, 1, 2, 3, 4, 5] },
+    { name: "サブ", slots: [6, 7, 8, 9, 10, 11] },
+  ];
 
-    for (let step = 0; step < maxCustomPerCard; step++) {
-      let bestCustomId = null;
-      let bestScore = currentScore;
+  for (const group of groups) {
+    for (let pick = 0; pick < maxCustomPerGroup; pick++) {
+      let bestMove = null;
+      let bestScore = -Infinity;
 
-      for (const cid of avail) {
-        const cObj = customById.get(String(cid));
-        const maxPerType = cObj?.max ?? 1;
-        const curCount = current.customs[slot][cid] || 0;
-        if (curCount >= maxPerType) continue;
+      for (const slot of group.slots) {
+        const card = cardById.get(current.cards[slot]);
+        const avail = card?.availableCustomizations || [];
+        for (const cid of avail) {
+          const cObj = customById.get(String(cid));
+          const maxPerType = cObj?.max ?? 1;
+          const curCount = current.customs[slot][cid] || 0;
+          if (curCount >= maxPerType) continue;
 
-        const next = structuredClone(current);
-        next.customs[slot][cid] = curCount + 1;
-        const score = (await evaluate(toLoadout(baseLoadout, next), fastRuns)).avg;
-        if (score > bestScore) {
-          bestScore = score;
-          bestCustomId = cid;
+          const next = structuredClone(current);
+          next.customs[slot][cid] = curCount + 1;
+          const score = (await evaluate(toLoadout(baseLoadout, next), fastRuns)).avg;
+          if (score > bestScore) {
+            bestScore = score;
+            bestMove = { slot, cid };
+          }
         }
       }
 
-      if (bestCustomId !== null) {
-        current.customs[slot][bestCustomId] = (current.customs[slot][bestCustomId] || 0) + 1;
+      if (bestMove) {
+        current.customs[bestMove.slot][bestMove.cid] =
+          (current.customs[bestMove.slot][bestMove.cid] || 0) + 1;
         currentScore = bestScore;
       } else {
         break;
