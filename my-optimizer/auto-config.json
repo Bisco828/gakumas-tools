@@ -1,0 +1,17 @@
+{
+  "stageIds": [193, 194, 195],
+  "targetStage": "all",
+  "params": [3200, 2400, 1400, 52],
+  "supportBonus": 0.10,
+  "pIdolIds": "auto",
+  "onlyOwned": true,
+  "autoTopNAll": 8,
+  "autoTopNOwned": 5,
+  "search": {
+    "passes": 2,
+    "fastRuns": 20,
+    "finalRuns": 500,
+    "includeR": false,
+    "maxCustomPerCard": 2
+  }
+}
