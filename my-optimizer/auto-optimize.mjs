@@ -79,7 +79,7 @@ function getOwnAssets(pIdol) {
     allCards.find((c) => c.pIdolId === pIdol.id && c.upgraded) ||
     allCards.find((c) => c.pIdolId === pIdol.id);
   const ownItem =
-    allItems.find((p) => p.pIdolId === pIdol.id && p.upgraded) ||
+    allItems.find((p) => p.pIdolId === pIdol.id && !p.upgraded) ||
     allItems.find((p) => p.pIdolId === pIdol.id);
   return { ownCard, ownItem };
 }

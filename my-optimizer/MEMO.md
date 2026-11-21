@@ -22,6 +22,14 @@ node --no-warnings --loader ./scripts/extensionless-loader.mjs -e 'import { PIdo
 ## 5. 自動最適化を実行する
 node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs
 
+## my-optimizer/auto-config.json の "targetStage" を数字に変えて保存（Ctrl + S）するだけです。
+
+ステージ1だけ回す場合："targetStage": 1,
+ステージ2だけ回す場合："targetStage": 2,
+ステージ3だけ回す場合："targetStage": 3,
+
+※ 数字に ""（ダブルクォーテーション）は付けなくてOKです。全部まとめて回すときは "all" に戻します。
+
 ## ※ 途中で止めたいときはターミナルで Ctrl + C。
 EOF
 
