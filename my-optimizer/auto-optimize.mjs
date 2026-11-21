@@ -106,7 +106,7 @@ function buildPlanPools(plan, includeR) {
 
 function createInitialState(ownCard, ownItem, cardPool, itemPool) {
   const items = ownItem ? [ownItem.id] : [];
-  while (items.length < 3) {
+  while (items.length < 4) {
     const pick = randPick(itemPool);
     if (!items.includes(pick.id)) items.push(pick.id);
   }
@@ -136,7 +136,7 @@ async function optimizeDeck(baseLoadout, state, hasOwnCard, hasOwnItem, cardPool
     let improved = false;
 
     const itemStart = hasOwnItem ? 1 : 0;
-    for (let slot = itemStart; slot < 3; slot++) {
+    for (let slot = itemStart; slot < 4; slot++) {
       let bestId = current.items[slot];
       for (const cand of itemPool) {
         if (cand.id === current.items[slot] || current.items.includes(cand.id)) continue;
