@@ -41,9 +41,14 @@ node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto
 
 アイドルに合わせる：
 node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 all idol
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 2 all idol
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 3 all idol
 
 ステージに合わせる：
 node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 all stage
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 2 all stage
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 3 all stage
+
 
 ## ステージ1のみ × 所持キャラ
 
