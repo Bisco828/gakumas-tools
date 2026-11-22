@@ -241,7 +241,6 @@ function getOwnAssets(pIdol) {
 function getSubOwnCards(mainPIdol, ownedSet) {
   const name = idolById.get(mainPIdol.idolId)?.name || "";
   const subPIdols = PIdols.getAll().filter((p) => {
-    if (p.id === mainPIdol.id) return false;
     if (p.idolId !== mainPIdol.idolId) return false;
     if (p.plan !== mainPIdol.plan) return false;
     if (!p.title) return false;
@@ -249,7 +248,7 @@ function getSubOwnCards(mainPIdol, ownedSet) {
       const fullLabel = `${name}【${p.title}】`;
       return ownedSet.has(String(p.id)) || ownedSet.has(fullLabel);
     }
-    return p.rarity === "SSR" || p.rarity === "SR";
+    return p.rarity === "SSR" || p.rarity === "SR" || p.rarity === "R";
   });
 
   const subCards = [];
@@ -506,7 +505,7 @@ function formatCardWithCustom(cardId, customObj) {
 function getSubIdolLabel(subCardId, mainPIdol) {
   const card = cardById.get(subCardId);
   if (!card?.pIdolId) return "なし";
-  if (card.pIdolId === mainPIdol.id) return "メインと同じ";
+  if (card.pIdolId === mainPIdol.id) return `メインと同じ(${card.name})`;
   const sp = PIdols.getById(card.pIdolId);
   if (!sp) return "不明";
   const name = idolById.get(sp.idolId)?.name || "";
@@ -587,21 +586,20 @@ async function selectTopSSR(stage, baseLoadout, topN, includeR, ownedSet, basePa
     let bestTplName = "";
 
     for (const ownCard of ownCardCandidates) {
-      for (const { name: tplName, state: template } of templates) {
-        const state = structuredClone(template);
-        if (ownItem) state.items[0] = ownItem.id;
-        if (ownCard) state.cards[0] = ownCard.id;
-        if (subCards.length > 0) {
-          state.cards[6] = subCards[0].id;
-        } else if (ownCard) {
-          state.cards[6] = ownCard.id;
-        }
+      const subTargets = subCards.length > 0 ? subCards : [ownCard];
+      for (const subCard of subTargets) {
+        for (const { name: tplName, state: template } of templates) {
+          const state = structuredClone(template);
+          if (ownItem) state.items[0] = ownItem.id;
+          if (ownCard) state.cards[0] = ownCard.id;
+          if (subCard) state.cards[6] = subCard.id;
 
-        const score = (await evaluate(toLoadout(idolLoadout, state), 50)).avg;
-        if (score > bestScore) {
-          bestScore = score;
-          bestState = state;
-          bestTplName = ownCards.length > 1 && ownCard ? `${tplName} / ${ownCard.name}` : tplName;
+          const score = (await evaluate(toLoadout(idolLoadout, state), 50)).avg;
+          if (score > bestScore) {
+            bestScore = score;
+            bestState = state;
+            bestTplName = ownCards.length > 1 && ownCard ? `${tplName} / ${ownCard.name}` : tplName;
+          }
         }
       }
     }
