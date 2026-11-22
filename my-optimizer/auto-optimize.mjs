@@ -19,8 +19,10 @@ const IDOL_AFFINITY = {
   秦谷美鈴: ["vo", "vi", "da"],
   花海佑芽: ["da", "vo", "vi"],
   姫崎莉波: ["vi", "da", "vo"],
-  氷渡香名江: ["vi", "vo", "da"], // ※必要に応じて流1→流2→流3に合わせて変更
+  氷渡香名江: ["vi", "vo", "da"],
 };
+
+const PRELIM_PATTERNS = 5; // テンプレ未登録プラン用の自動生成パターン数
 
 const allCards = SkillCards.getAll();
 const allItems = PItems.getAll();
@@ -30,7 +32,19 @@ const itemById = new Map(allItems.map((p) => [p.id, p]));
 const idolById = new Map(Idols.getAll().map((i) => [i.id, i]));
 const customById = new Map(allCustoms.map((c) => [String(c.id), c]));
 
-const randPick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+// 固定シード用の乱数生成器（Mulberry32）
+function createSeededRng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const randPick = (arr, rng = Math.random) => arr[Math.floor(rng() * arr.length)];
 const isSupportCard = (card) => card?.sourceType === "support";
 
 function getMaxCustomForCard(card) {
@@ -45,6 +59,112 @@ function loadOwnedSet(onlyOwned) {
   if (!onlyOwned || !existsSync("my-optimizer/owned.json")) return null;
   const raw = JSON.parse(readFileSync("my-optimizer/owned.json", "utf8"));
   return new Set(raw.map((v) => String(v)));
+}
+
+function loadTemplates() {
+  if (!existsSync("my-optimizer/templates.json")) return {};
+  return JSON.parse(readFileSync("my-optimizer/templates.json", "utf8"));
+}
+
+// "エキサイト+(絶好調+x2,好調追加)" のような表記をカードIDとカスタムに変換
+function parseCardSpec(spec, plan) {
+  const match = String(spec).trim().match(/^(.+?)(?:\((.+)\))?$/);
+  const cardName = match ? match[1].trim() : String(spec).trim();
+  const customStr = match?.[2]?.trim() || "";
+
+  const card =
+    allCards.find((c) => c.name === cardName && (c.plan === plan || c.plan === "free")) ||
+    allCards.find((c) => c.name === cardName);
+
+  if (!card) {
+    console.warn(`  [警告] テンプレのカードが見つかりません: "${cardName}"`);
+    return null;
+  }
+
+  const customs = {};
+  if (customStr) {
+    const parts = customStr.split(",").map((s) => s.trim()).filter(Boolean);
+    const availIds = (card.availableCustomizations || []).map(String);
+    for (const part of parts) {
+      const m = part.match(/^(.+?)(?:x(\d+))$/);
+      const cName = m ? m[1].trim() : part;
+      const count = m ? Number(m[2]) : 1;
+      const cid = availIds.find((id) => customById.get(id)?.name === cName);
+      if (cid) {
+        customs[cid] = (customs[cid] || 0) + count;
+      } else {
+        console.warn(`  [警告] "${cardName}" にカスタム "${cName}" が見つかりません`);
+      }
+    }
+  }
+
+  return { cardId: card.id, customs };
+}
+
+// templates.json の1定義から初期stateを作成（Pアイテムはランダム初期化後、自動最適化）
+function buildStateFromTemplate(tpl, plan, cardPool, itemPool, rng) {
+  const items = [];
+  while (items.length < 4) {
+    const pick = randPick(itemPool, rng);
+    if (!items.includes(pick.id)) items.push(pick.id);
+  }
+
+  const cards = [];
+  const customs = [];
+
+  // メイン（スロット0はダミー、スロット1〜5がテンプレ）
+  cards.push(cardPool[0].id);
+  customs.push({});
+  for (const spec of (tpl.main || []).slice(0, 5)) {
+    const parsed = parseCardSpec(spec, plan);
+    if (parsed) {
+      cards.push(parsed.cardId);
+      customs.push(parsed.customs);
+    }
+  }
+  while (cards.length < 6) {
+    cards.push(randPick(cardPool, rng).id);
+    customs.push({});
+  }
+
+  // サブ（スロット6はダミー、スロット7〜11がテンプレ）
+  cards.push(cardPool[0].id);
+  customs.push({});
+  for (const spec of (tpl.sub || []).slice(0, 5)) {
+    const parsed = parseCardSpec(spec, plan);
+    if (parsed) {
+      cards.push(parsed.cardId);
+      customs.push(parsed.customs);
+    }
+  }
+  while (cards.length < 12) {
+    cards.push(randPick(cardPool, rng).id);
+    customs.push({});
+  }
+
+  return { items, cards, customs };
+}
+
+// テンプレのカードは固定したまま、そのステージに最適なPアイテムだけを探索
+async function optimizeItemsOnly(baseLoadout, state, itemPool, fastRuns) {
+  let current = structuredClone(state);
+  let currentScore = (await evaluate(toLoadout(baseLoadout, current), fastRuns)).avg;
+
+  for (let slot = 1; slot < 4; slot++) {
+    let bestId = current.items[slot];
+    for (const cand of itemPool) {
+      if (cand.id === current.items[slot] || current.items.includes(cand.id)) continue;
+      const next = structuredClone(current);
+      next.items[slot] = cand.id;
+      const score = (await evaluate(toLoadout(baseLoadout, next), fastRuns)).avg;
+      if (score > currentScore) {
+        currentScore = score;
+        bestId = cand.id;
+      }
+    }
+    current.items[slot] = bestId;
+  }
+  return current;
 }
 
 // キャラの得意属性に合わせて [Vo, Da, Vi, 体力] を組み立てる
@@ -92,14 +212,12 @@ function getOwnAssets(pIdol) {
   const ownCard =
     allCards.find((c) => c.pIdolId === pIdol.id && c.upgraded) ||
     allCards.find((c) => c.pIdolId === pIdol.id);
-  // 固有Pアイテムは未強化を優先
   const ownItem =
     allItems.find((p) => p.pIdolId === pIdol.id && !p.upgraded) ||
     allItems.find((p) => p.pIdolId === pIdol.id);
   return { ownCard, ownItem };
 }
 
-// サブ用の固有カード候補（メインと同キャラ・同プランの別衣装）を取得
 function getSubOwnCards(mainPIdol, ownedSet) {
   const name = idolById.get(mainPIdol.idolId)?.name || "";
   const subPIdols = PIdols.getAll().filter((p) => {
@@ -136,7 +254,6 @@ function buildPlanPools(plan, includeR) {
       c.sourceType !== "default" &&
       allowedRarities.includes(c.rarity)
   );
-  // 汎用Pアイテムも未強化のみ
   const itemPool = allItems.filter(
     (p) =>
       p.mode === "stage" &&
@@ -148,7 +265,6 @@ function buildPlanPools(plan, includeR) {
   return { cardPool, itemPool };
 }
 
-// 指定グループ（メイン0-5 / サブ6-11）の他スロットにサポカカードが既にあるか判定
 function hasSupportCardInGroup(cards, slot) {
   const start = slot < 6 ? 0 : 6;
   const end = start + 6;
@@ -159,30 +275,28 @@ function hasSupportCardInGroup(cards, slot) {
   return false;
 }
 
-function createInitialState(ownCard, subOwnCard, ownItem, cardPool, itemPool) {
+function createInitialState(ownCard, subOwnCard, ownItem, cardPool, itemPool, rng = Math.random) {
   const items = ownItem ? [ownItem.id] : [];
   while (items.length < 4) {
-    const pick = randPick(itemPool);
+    const pick = randPick(itemPool, rng);
     if (!items.includes(pick.id)) items.push(pick.id);
   }
 
-  // メイン6枚（固有1 + 汎用5、サポカは最大1枚）
   const cards = ownCard ? [ownCard.id] : [];
   let mainHasSupport = false;
   while (cards.length < 6) {
-    const pick = randPick(cardPool);
+    const pick = randPick(cardPool, rng);
     if (pick.unique && cards.includes(pick.id)) continue;
     if (isSupportCard(pick) && mainHasSupport) continue;
     if (isSupportCard(pick)) mainHasSupport = true;
     cards.push(pick.id);
   }
 
-  // サブ6枚（サブ固有1 + 汎用5、サポカは最大1枚）
   const subFirst = subOwnCard || ownCard;
   if (subFirst) cards.push(subFirst.id);
   let subHasSupport = false;
   while (cards.length < 12) {
-    const pick = randPick(cardPool);
+    const pick = randPick(cardPool, rng);
     if (pick.unique && cards.includes(pick.id)) continue;
     if (isSupportCard(pick) && subHasSupport) continue;
     if (isSupportCard(pick)) subHasSupport = true;
@@ -219,7 +333,6 @@ async function optimizeDeck(
   for (let pass = 1; pass <= passes; pass++) {
     let improved = false;
 
-    // Pアイテム最適化（4枠）
     const itemStart = hasOwnItem ? 1 : 0;
     for (let slot = itemStart; slot < 4; slot++) {
       let bestId = current.items[slot];
@@ -237,7 +350,6 @@ async function optimizeDeck(
       current.items[slot] = bestId;
     }
 
-    // スキルカード最適化（スロット0=メイン固有固定、スロット6=サブ固有候補から選択、他=汎用）
     for (let slot = 0; slot < 12; slot++) {
       if (hasOwnCard && slot === 0) continue;
 
@@ -262,10 +374,10 @@ async function optimizeDeck(
 
       const groupAlreadyHasSupport = hasSupportCardInGroup(current.cards, slot);
       let bestId = current.cards[slot];
+      let bestCustoms = current.customs[slot];
       for (const cand of cardPool) {
         if (cand.id === current.cards[slot]) continue;
         if (cand.unique && current.cards.some((id, idx) => idx !== slot && id === cand.id)) continue;
-        // 同じメモリー（メイン/サブ）内にサポカカードは最大1枚まで
         if (isSupportCard(cand) && groupAlreadyHasSupport) continue;
 
         const next = structuredClone(current);
@@ -275,10 +387,12 @@ async function optimizeDeck(
         if (score > currentScore) {
           currentScore = score;
           bestId = cand.id;
+          bestCustoms = {};
           improved = true;
         }
       }
       current.cards[slot] = bestId;
+      current.customs[slot] = bestCustoms;
     }
 
     if (!silent) console.log(`  [デッキ第${pass}周] 暫定平均スコア: ${currentScore}`);
@@ -288,8 +402,6 @@ async function optimizeDeck(
   return current;
 }
 
-// メモリー1つあたり：通常カードは最大 maxNormalCards 枚まで、サポカは別枠でカスタム
-// 各カードのカスタム回数上限はレアリティ準拠（R:3 / SR:2 / SSR:1）
 async function optimizeCustomizations(baseLoadout, state, maxNormalCards, fastRuns) {
   if (maxNormalCards <= 0) return state;
 
@@ -365,11 +477,10 @@ function formatCardWithCustom(cardId, customObj) {
       const cName = customById.get(String(cid))?.name || `C#${cid}`;
       return cnt > 1 ? `${cName}x${cnt}` : cName;
     })
-    .join("+");
+    .join(",");
   return `${name}(${cText})`;
 }
 
-// サブの先頭カードからサブ衣装名を取得
 function getSubIdolLabel(subCardId, mainPIdol) {
   const card = cardById.get(subCardId);
   if (!card?.pIdolId) return "なし";
@@ -380,7 +491,7 @@ function getSubIdolLabel(subCardId, mainPIdol) {
   return `${name}【${sp.title}】`;
 }
 
-// 全SSR（または所持SSRのみ）から予選で上位N人を自動選出する
+// 予選（templates.json があるプランはテンプレ＋最適Pアイテム、未登録プランは5パターン自動生成）
 async function selectTopSSR(stage, baseLoadout, topN, includeR, ownedSet, baseParams, paramMode) {
   const stagePlan = stage?.plan && stage.plan !== "free" ? stage.plan : null;
 
@@ -408,36 +519,69 @@ async function selectTopSSR(stage, baseLoadout, topN, includeR, ownedSet, basePa
     return [];
   }
 
-  // プランごとに共通の強いベースデッキを1回だけ作る
+  const userTemplates = loadTemplates();
   const plans = [...new Set(candidates.map((p) => p.plan))];
   const planTemplates = new Map();
+
   for (const plan of plans) {
-    console.log(`  [${plan}] 予選用ベースデッキを生成中...`);
     const { cardPool, itemPool } = buildPlanPools(plan, includeR);
-    const init = createInitialState(null, null, null, cardPool, itemPool);
-    const template = await optimizeDeck(baseLoadout, init, false, false, cardPool, itemPool, [], 1, 15, true);
-    planTemplates.set(plan, template);
+    const definedList = userTemplates[plan];
+
+    if (Array.isArray(definedList) && definedList.length > 0) {
+      console.log(`  [${plan}] templates.json の下地 ${definedList.length}パターンを読み込み、最適Pアイテムを探索中...`);
+      const templates = [];
+      for (let i = 0; i < definedList.length; i++) {
+        const tpl = definedList[i];
+        const rng = createSeededRng((i + 1) * 1000 + stage.id);
+        const rawState = buildStateFromTemplate(tpl, plan, cardPool, itemPool, rng);
+        const optState = await optimizeItemsOnly(baseLoadout, rawState, itemPool, 15);
+        templates.push({ name: tpl.name || `テンプレ${i + 1}`, state: optState });
+      }
+      planTemplates.set(plan, templates);
+    } else {
+      console.log(`  [${plan}] テンプレ未登録のため ${PRELIM_PATTERNS}パターン自動生成中...`);
+      const templates = [];
+      for (let seed = 1; seed <= PRELIM_PATTERNS; seed++) {
+        const rng = createSeededRng(seed * 1000 + stage.id);
+        const init = createInitialState(null, null, null, cardPool, itemPool, rng);
+        const template = await optimizeDeck(baseLoadout, init, false, false, cardPool, itemPool, [], 1, 15, true);
+        templates.push({ name: `自動#${seed}`, state: template });
+      }
+      planTemplates.set(plan, templates);
+    }
   }
 
-  // 対象SSRの固有カード＆固有Pアイテム＋サブ固有＋得意属性ステで一斉評価
   const prelim = [];
   for (const pIdol of candidates) {
     const idolName = idolById.get(pIdol.idolId)?.name || "";
     const idolLoadout = withIdolParams(baseLoadout, idolName, baseParams, paramMode);
-    const template = planTemplates.get(pIdol.plan);
+    const templates = planTemplates.get(pIdol.plan);
     const { ownCard, ownItem } = getOwnAssets(pIdol);
     const subCards = getSubOwnCards(pIdol, ownedSet);
-    const state = structuredClone(template);
-    if (ownItem) state.items[0] = ownItem.id;
-    if (ownCard) state.cards[0] = ownCard.id;
-    if (subCards.length > 0) {
-      state.cards[6] = subCards[0].id;
-    } else if (ownCard) {
-      state.cards[6] = ownCard.id;
+
+    let bestScore = -Infinity;
+    let bestState = null;
+    let bestTplName = "";
+
+    for (const { name: tplName, state: template } of templates) {
+      const state = structuredClone(template);
+      if (ownItem) state.items[0] = ownItem.id;
+      if (ownCard) state.cards[0] = ownCard.id;
+      if (subCards.length > 0) {
+        state.cards[6] = subCards[0].id;
+      } else if (ownCard) {
+        state.cards[6] = ownCard.id;
+      }
+
+      const score = (await evaluate(toLoadout(idolLoadout, state), 30)).avg;
+      if (score > bestScore) {
+        bestScore = score;
+        bestState = state;
+        bestTplName = tplName;
+      }
     }
 
-    const score = (await evaluate(toLoadout(idolLoadout, state), 30)).avg;
-    prelim.push({ pIdol, score, initState: state });
+    prelim.push({ pIdol, score: bestScore, initState: bestState, tplName: bestTplName });
   }
 
   prelim.sort((a, b) => b.score - a.score);
@@ -446,7 +590,7 @@ async function selectTopSSR(stage, baseLoadout, topN, includeR, ownedSet, basePa
   console.log(`\n=== 予選突破 上位${winners.length}キャラ ===`);
   winners.forEach((w, i) => {
     const name = idolById.get(w.pIdol.idolId)?.name || `Idol#${w.pIdol.idolId}`;
-    console.log(`  ${i + 1}位: ${name}【${w.pIdol.title}】(${w.pIdol.plan}) 予選スコア: ${w.score}`);
+    console.log(`  ${i + 1}位: ${name}【${w.pIdol.title}】(${w.pIdol.plan} / ${w.tplName}) 予選スコア: ${w.score}`);
   });
 
   return winners;
@@ -499,7 +643,9 @@ async function runForStage(stageId, stageLabel, cfg) {
     const { cardPool, itemPool } = buildPlanPools(pIdol.plan, includeR);
     console.log(`\n▶ 本選ガチ探索: ${label} [Vo:${vo} / Da:${da} / Vi:${vi}] (サブ候補: ${subCardPool.length}種)`);
 
-    const startState = presetState || createInitialState(ownCard, subCardPool[0] || ownCard, ownItem, cardPool, itemPool);
+    const startState =
+      presetState ||
+      createInitialState(ownCard, subCardPool[0] || ownCard, ownItem, cardPool, itemPool, createSeededRng(pIdol.id));
     const deckOptimized = await optimizeDeck(
       idolLoadout,
       startState,
