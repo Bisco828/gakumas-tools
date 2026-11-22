@@ -573,7 +573,7 @@ async function selectTopSSR(stage, baseLoadout, topN, includeR, ownedSet, basePa
         state.cards[6] = ownCard.id;
       }
 
-      const score = (await evaluate(toLoadout(idolLoadout, state), 30)).avg;
+      const score = (await evaluate(toLoadout(idolLoadout, state), 50)).avg;
       if (score > bestScore) {
         bestScore = score;
         bestState = state;
