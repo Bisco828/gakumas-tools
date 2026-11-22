@@ -54,9 +54,13 @@ node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto
 
 アイドルに合わせる：
 node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 owned idol
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 2 owned idol
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 3 owned idol
 
 ステージに合わせる：
 node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 owned stage
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 2 owned stage
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 3 owned stage
 
 
 ## ※ 途中で止めたいときはターミナルで Ctrl + C。
