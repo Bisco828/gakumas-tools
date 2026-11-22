@@ -21,17 +21,37 @@ node --no-warnings --loader ./scripts/extensionless-loader.mjs -e 'import { PIdo
 
 ## 5. 自動最適化を実行する
 
-全ステージ × 全キャラ
-node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs all all
+## 全ステージ × 全キャラ
 
-全ステージ × 所持キャラ
-node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs all owned
+アイドルに合わせる：
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs all all idol
 
-ステージ1のみ × 全キャラ（※ 1 を 2 や 3 に変えれば他ステージ）
-node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 all
+ステージに合わせる：
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs all all stage
 
-ステージ1のみ × 所持キャラ
-node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 owned
+## 全ステージ × 所持キャラ
+
+アイドルに合わせる：
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs all owned idol
+
+ステージに合わせる：
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs all owned stage
+
+## ステージ1のみ × 全キャラ（※ 1 を 2 や 3 に変えれば他ステージ）
+
+アイドルに合わせる：
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 all idol
+
+ステージに合わせる：
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 all stage
+
+## ステージ1のみ × 所持キャラ
+
+アイドルに合わせる：
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 owned idol
+
+ステージに合わせる：
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 owned stage
 
 
 ## ※ 途中で止めたいときはターミナルで Ctrl + C。

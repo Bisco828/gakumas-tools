@@ -167,11 +167,29 @@ async function optimizeItemsOnly(baseLoadout, state, itemPool, fastRuns) {
   return current;
 }
 
-// キャラの得意属性に合わせて [Vo, Da, Vi, 体力] を組み立てる
-function buildParamsForIdol(idolName, baseParams, paramMode) {
-  if (paramMode !== "idol") return [...baseParams];
-  const key = (idolName || "").replace(/\s+/g, "");
-  const order = IDOL_AFFINITY[key] || ["vo", "da", "vi"];
+// ステージの流行順（criteria / turnCounts の降順）を取得
+function getStageAffinity(stage) {
+  const c = stage?.criteria || stage?.turnCounts;
+  if (!c) return ["vo", "da", "vi"];
+  return [
+    { key: "vo", val: c.vocal ?? 0 },
+    { key: "da", val: c.dance ?? 0 },
+    { key: "vi", val: c.visual ?? 0 },
+  ]
+    .sort((a, b) => b.val - a.val)
+    .map((x) => x.key);
+}
+
+// キャラまたはステージの流行に合わせて [Vo, Da, Vi, 体力] を組み立てる
+function buildParamsForIdol(idolName, baseParams, paramMode, stage) {
+  if (paramMode === "fixed") return [...baseParams];
+  let order = ["vo", "da", "vi"];
+  if (paramMode === "stage") {
+    order = getStageAffinity(stage);
+  } else if (paramMode === "idol") {
+    const key = (idolName || "").replace(/\s+/g, "");
+    order = IDOL_AFFINITY[key] || ["vo", "da", "vi"];
+  }
   const mapped = { vo: baseParams[0], da: baseParams[1], vi: baseParams[2] };
   mapped[order[0]] = baseParams[0];
   mapped[order[1]] = baseParams[1];
@@ -179,9 +197,9 @@ function buildParamsForIdol(idolName, baseParams, paramMode) {
   return [mapped.vo, mapped.da, mapped.vi, baseParams[3]];
 }
 
-function withIdolParams(baseLoadout, idolName, baseParams, paramMode) {
+function withIdolParams(baseLoadout, idolName, baseParams, paramMode, stage) {
   const clone = structuredClone(baseLoadout);
-  clone.params = buildParamsForIdol(idolName, baseParams, paramMode);
+  clone.params = buildParamsForIdol(idolName, baseParams, paramMode, stage);
   return clone;
 }
 
@@ -554,7 +572,7 @@ async function selectTopSSR(stage, baseLoadout, topN, includeR, ownedSet, basePa
   const prelim = [];
   for (const pIdol of candidates) {
     const idolName = idolById.get(pIdol.idolId)?.name || "";
-    const idolLoadout = withIdolParams(baseLoadout, idolName, baseParams, paramMode);
+    const idolLoadout = withIdolParams(baseLoadout, idolName, baseParams, paramMode, stage);
     const templates = planTemplates.get(pIdol.plan);
     const { ownCard, ownItem } = getOwnAssets(pIdol);
     const subCards = getSubOwnCards(pIdol, ownedSet);
@@ -635,7 +653,7 @@ async function runForStage(stageId, stageLabel, cfg) {
   for (const { pIdol, initState: presetState } of targetEntries) {
     const idolName = idolById.get(pIdol.idolId)?.name || `Idol#${pIdol.idolId}`;
     const label = `${idolName}【${pIdol.title}】(${pIdol.plan})`;
-    const idolLoadout = withIdolParams(baseLoadout, idolName, cfg.params, paramMode);
+    const idolLoadout = withIdolParams(baseLoadout, idolName, cfg.params, paramMode, stage);
     const [vo, da, vi] = idolLoadout.params;
 
     const { ownCard, ownItem } = getOwnAssets(pIdol);
@@ -717,10 +735,14 @@ async function runForStage(stageId, stageLabel, cfg) {
 
 // 実行対象ステージの決定（コマンド引数があれば auto-config.json より優先）
 const cfg = JSON.parse(readFileSync("my-optimizer/auto-config.json", "utf8"));
-const [argStage, argMode] = process.argv.slice(2);
+const [argStage, argMode, argParamMode] = process.argv.slice(2);
 
 if (argMode === "all") cfg.onlyOwned = false;
 else if (argMode === "owned") cfg.onlyOwned = true;
+
+if (argParamMode === "idol" || argParamMode === "stage" || argParamMode === "fixed") {
+  cfg.paramMode = argParamMode;
+}
 
 const stageIds = cfg.stageIds || (cfg.stageId ? [cfg.stageId] : []);
 const rawTarget = argStage ?? cfg.targetStage ?? "all";
