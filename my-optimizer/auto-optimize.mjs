@@ -31,6 +31,15 @@ const idolById = new Map(Idols.getAll().map((i) => [i.id, i]));
 const customById = new Map(allCustoms.map((c) => [String(c.id), c]));
 
 const randPick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const isSupportCard = (card) => card?.sourceType === "support";
+
+function getMaxCustomForCard(card) {
+  if (!card) return 0;
+  if (card.rarity === "R") return 3;
+  if (card.rarity === "SR") return 2;
+  if (card.rarity === "SSR") return 1;
+  return 1;
+}
 
 function loadOwnedSet(onlyOwned) {
   if (!onlyOwned || !existsSync("my-optimizer/owned.json")) return null;
@@ -102,7 +111,6 @@ function getSubOwnCards(mainPIdol, ownedSet) {
       const fullLabel = `${name}【${p.title}】`;
       return ownedSet.has(String(p.id)) || ownedSet.has(fullLabel);
     }
-    // SR/Rは所持前提で候補に含める（SSRのみにしたい場合は p.rarity === "SSR" に変更）
     return p.rarity === "SSR" || p.rarity === "SR";
   });
 
@@ -140,6 +148,17 @@ function buildPlanPools(plan, includeR) {
   return { cardPool, itemPool };
 }
 
+// 指定グループ（メイン0-5 / サブ6-11）の他スロットにサポカカードが既にあるか判定
+function hasSupportCardInGroup(cards, slot) {
+  const start = slot < 6 ? 0 : 6;
+  const end = start + 6;
+  for (let i = start; i < end; i++) {
+    if (i === slot) continue;
+    if (isSupportCard(cardById.get(cards[i]))) return true;
+  }
+  return false;
+}
+
 function createInitialState(ownCard, subOwnCard, ownItem, cardPool, itemPool) {
   const items = ownItem ? [ownItem.id] : [];
   while (items.length < 4) {
@@ -147,20 +166,26 @@ function createInitialState(ownCard, subOwnCard, ownItem, cardPool, itemPool) {
     if (!items.includes(pick.id)) items.push(pick.id);
   }
 
-  // メイン6枚（固有1 + 汎用5）
+  // メイン6枚（固有1 + 汎用5、サポカは最大1枚）
   const cards = ownCard ? [ownCard.id] : [];
+  let mainHasSupport = false;
   while (cards.length < 6) {
     const pick = randPick(cardPool);
     if (pick.unique && cards.includes(pick.id)) continue;
+    if (isSupportCard(pick) && mainHasSupport) continue;
+    if (isSupportCard(pick)) mainHasSupport = true;
     cards.push(pick.id);
   }
 
-  // サブ6枚（サブ固有1 + 汎用5）
+  // サブ6枚（サブ固有1 + 汎用5、サポカは最大1枚）
   const subFirst = subOwnCard || ownCard;
   if (subFirst) cards.push(subFirst.id);
+  let subHasSupport = false;
   while (cards.length < 12) {
     const pick = randPick(cardPool);
     if (pick.unique && cards.includes(pick.id)) continue;
+    if (isSupportCard(pick) && subHasSupport) continue;
+    if (isSupportCard(pick)) subHasSupport = true;
     cards.push(pick.id);
   }
 
@@ -235,10 +260,14 @@ async function optimizeDeck(
         continue;
       }
 
+      const groupAlreadyHasSupport = hasSupportCardInGroup(current.cards, slot);
       let bestId = current.cards[slot];
       for (const cand of cardPool) {
         if (cand.id === current.cards[slot]) continue;
         if (cand.unique && current.cards.some((id, idx) => idx !== slot && id === cand.id)) continue;
+        // 同じメモリー（メイン/サブ）内にサポカカードは最大1枚まで
+        if (isSupportCard(cand) && groupAlreadyHasSupport) continue;
+
         const next = structuredClone(current);
         next.cards[slot] = cand.id;
         next.customs[slot] = {};
@@ -259,26 +288,47 @@ async function optimizeDeck(
   return current;
 }
 
-async function optimizeCustomizations(baseLoadout, state, maxCustomPerGroup, fastRuns) {
-  if (maxCustomPerGroup <= 0) return state;
+// メモリー1つあたり：通常カードは最大 maxNormalCards 枚まで、サポカは別枠でカスタム
+// 各カードのカスタム回数上限はレアリティ準拠（R:3 / SR:2 / SSR:1）
+async function optimizeCustomizations(baseLoadout, state, maxNormalCards, fastRuns) {
+  if (maxNormalCards <= 0) return state;
 
   let current = structuredClone(state);
   let currentScore = (await evaluate(toLoadout(baseLoadout, current), fastRuns)).avg;
 
-  // メイン(0〜5)とサブ(6〜11)それぞれで、スコアが最も伸びるカスタムを最大 maxCustomPerGroup 個選ぶ
   const groups = [
     { name: "メイン", slots: [0, 1, 2, 3, 4, 5] },
     { name: "サブ", slots: [6, 7, 8, 9, 10, 11] },
   ];
 
   for (const group of groups) {
-    for (let pick = 0; pick < maxCustomPerGroup; pick++) {
+    // 1グループ内の最大試行回数（安全弁）
+    for (let step = 0; step < 12; step++) {
+      // このメモリー内で既にカスタム済みの通常カード枚数を数える
+      let customizedNormalCount = 0;
+      for (const slot of group.slots) {
+        const card = cardById.get(current.cards[slot]);
+        const cnt = Object.values(current.customs[slot]).reduce((a, b) => a + b, 0);
+        if (cnt > 0 && !isSupportCard(card)) customizedNormalCount++;
+      }
+
       let bestMove = null;
-      let bestScore = -Infinity;
+      let bestScore = currentScore;
 
       for (const slot of group.slots) {
         const card = cardById.get(current.cards[slot]);
         const avail = card?.availableCustomizations || [];
+        if (avail.length === 0) continue;
+
+        const existingCount = Object.values(current.customs[slot]).reduce((a, b) => a + b, 0);
+        const cardMax = getMaxCustomForCard(card);
+        if (existingCount >= cardMax) continue;
+
+        // 通常カードかつ未カスタムの場合、既に2枚埋まっていたら新規追加不可（サポカは別枠なので許可）
+        if (!isSupportCard(card) && existingCount === 0 && customizedNormalCount >= maxNormalCards) {
+          continue;
+        }
+
         for (const cid of avail) {
           const cObj = customById.get(String(cid));
           const maxPerType = cObj?.max ?? 1;
@@ -320,6 +370,17 @@ function formatCardWithCustom(cardId, customObj) {
     })
     .join("+");
   return `${name}(${cText})`;
+}
+
+// サブの先頭カードからサブ衣装名を取得
+function getSubIdolLabel(subCardId, mainPIdol) {
+  const card = cardById.get(subCardId);
+  if (!card?.pIdolId) return "なし";
+  if (card.pIdolId === mainPIdol.id) return "メインと同じ";
+  const sp = PIdols.getById(card.pIdolId);
+  if (!sp) return "不明";
+  const name = idolById.get(sp.idolId)?.name || "";
+  return `${name}【${sp.title}】`;
 }
 
 // 全SSR（または所持SSRのみ）から予選で上位N人を自動選出する
@@ -416,7 +477,7 @@ async function runForStage(stageId, stageLabel, cfg) {
   const fastRuns = cfg.search?.fastRuns ?? 20;
   const finalRuns = cfg.search?.finalRuns ?? 500;
   const includeR = cfg.search?.includeR ?? false;
-  const maxCustomPerCard = cfg.search?.maxCustomPerCard ?? 2;
+  const maxCustomCards = cfg.search?.maxCustomPerCard ?? 2;
 
   let targetEntries = [];
   if (cfg.pIdolIds === "auto") {
@@ -456,13 +517,16 @@ async function runForStage(stageId, stageLabel, cfg) {
     const fullOptimized = await optimizeCustomizations(
       idolLoadout,
       deckOptimized,
-      maxCustomPerCard,
+      maxCustomCards,
       fastRuns
     );
 
     const finalStats = await evaluate(toLoadout(idolLoadout, fullOptimized), finalRuns);
+    const subIdolLabel = getSubIdolLabel(fullOptimized.cards[6], pIdol);
+
     summary.push({
       キャラ: label,
+      サブ衣装: subIdolLabel,
       ステ: `${vo}/${da}/${vi}`,
       平均スコア: finalStats.avg,
       下振れ20: finalStats.p20,
@@ -487,6 +551,7 @@ async function runForStage(stageId, stageLabel, cfg) {
   console.table(
     summary.map((s) => ({
       キャラ: s.キャラ,
+      サブ衣装: s.サブ衣装,
       "Vo/Da/Vi": s.ステ,
       平均スコア: s.平均スコア,
       "下振れ(20%)": s.下振れ20,
@@ -498,6 +563,7 @@ async function runForStage(stageId, stageLabel, cfg) {
   console.log(`\n--- ${stageLabel} の最適デッキ＆カスタム詳細 ---`);
   summary.forEach((s, i) => {
     console.log(`\n[${i + 1}位] ${s.キャラ} [Vo/Da/Vi: ${s.ステ}] (平均: ${s.平均スコア} / 下振れ: ${s.下振れ20})`);
+    console.log(`  サブ衣装 : ${s.サブ衣装}`);
     console.log(`  Pアイテム: ${s.最適Pアイテム}`);
     console.log(`  メイン   : [${s.メイン}]`);
     console.log(`  サブ     : [${s.サブ}]`);
@@ -535,6 +601,7 @@ if (allStageTops.length > 1) {
     allStageTops.map((r) => ({
       ステージ: `${r.stageLabel} (ID:${r.stageId})`,
       "1位キャラ": r.top ? r.top.キャラ : "なし",
+      サブ衣装: r.top ? r.top.サブ衣装 : "-",
       平均スコア: r.top ? r.top.平均スコア : 0,
       "下振れ(20%)": r.top ? r.top.下振れ20 : 0,
     }))
