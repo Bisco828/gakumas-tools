@@ -20,15 +20,19 @@ node --no-warnings --loader ./scripts/extensionless-loader.mjs -e 'import { PIdo
 "params": [Vo, Da, Vi, 体力]
 
 ## 5. 自動最適化を実行する
-node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs
 
-## my-optimizer/auto-config.json の "targetStage" を数字に変えて保存（Ctrl + S）するだけです。
+全ステージ × 全キャラ
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs all all
 
-ステージ1だけ回す場合："targetStage": 1,
-ステージ2だけ回す場合："targetStage": 2,
-ステージ3だけ回す場合："targetStage": 3,
+全ステージ × 所持キャラ
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs all owned
 
-※ 数字に ""（ダブルクォーテーション）は付けなくてOKです。全部まとめて回すときは "all" に戻します。
+ステージ1のみ × 全キャラ（※ 1 を 2 や 3 に変えれば他ステージ）
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 all
+
+ステージ1のみ × 所持キャラ
+node --no-warnings --loader ./scripts/extensionless-loader.mjs my-optimizer/auto-optimize.mjs 1 owned
+
 
 ## ※ 途中で止めたいときはターミナルで Ctrl + C。
 EOF
@@ -40,5 +44,4 @@ EOF
 ### GitHub上にもバックアップしておきたい場合
 今のCodespacesが**自分のアカウントにフォーク（Fork）したリポジトリ**なら、以下を実行すると `my-optimizer` フォルダごと（スクリプト・所持リスト・メモ全部）GitHubに保存されます。
 
-```bash
-git add my-optimizer && git commit -m "add my-optimizer" && git push
+git add my-optimizer && git commit -m "add CLI args for stage and owned mode" && git push
