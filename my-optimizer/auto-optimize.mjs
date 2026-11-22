@@ -19,7 +19,7 @@ const IDOL_AFFINITY = {
   秦谷美鈴: ["vo", "vi", "da"],
   花海佑芽: ["da", "vo", "vi"],
   姫崎莉波: ["vi", "da", "vo"],
-  氷渡香名江: ["vo", "da", "vi"], // ※必要に応じて流1→流2→流3に合わせて変更
+  氷渡香名江: ["vi", "vo", "da"], // ※必要に応じて流1→流2→流3に合わせて変更
 };
 
 const allCards = SkillCards.getAll();
@@ -302,9 +302,7 @@ async function optimizeCustomizations(baseLoadout, state, maxNormalCards, fastRu
   ];
 
   for (const group of groups) {
-    // 1グループ内の最大試行回数（安全弁）
     for (let step = 0; step < 12; step++) {
-      // このメモリー内で既にカスタム済みの通常カード枚数を数える
       let customizedNormalCount = 0;
       for (const slot of group.slots) {
         const card = cardById.get(current.cards[slot]);
@@ -324,7 +322,6 @@ async function optimizeCustomizations(baseLoadout, state, maxNormalCards, fastRu
         const cardMax = getMaxCustomForCard(card);
         if (existingCount >= cardMax) continue;
 
-        // 通常カードかつ未カスタムの場合、既に2枚埋まっていたら新規追加不可（サポカは別枠なので許可）
         if (!isSupportCard(card) && existingCount === 0 && customizedNormalCount >= maxNormalCards) {
           continue;
         }
@@ -572,10 +569,16 @@ async function runForStage(stageId, stageLabel, cfg) {
   return { stageLabel, stageId, top: summary[0] || null };
 }
 
-// 実行対象ステージの決定
+// 実行対象ステージの決定（コマンド引数があれば auto-config.json より優先）
 const cfg = JSON.parse(readFileSync("my-optimizer/auto-config.json", "utf8"));
+const [argStage, argMode] = process.argv.slice(2);
+
+if (argMode === "all") cfg.onlyOwned = false;
+else if (argMode === "owned") cfg.onlyOwned = true;
+
 const stageIds = cfg.stageIds || (cfg.stageId ? [cfg.stageId] : []);
-const target = cfg.targetStage ?? "all";
+const rawTarget = argStage ?? cfg.targetStage ?? "all";
+const target = rawTarget === "all" ? "all" : Number(rawTarget);
 
 let runList = [];
 if (target === "all") {
