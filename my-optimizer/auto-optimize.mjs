@@ -227,13 +227,15 @@ async function evaluate(loadout, runs) {
 }
 
 function getOwnAssets(pIdol) {
-  const ownCard =
-    allCards.find((c) => c.pIdolId === pIdol.id && c.upgraded) ||
-    allCards.find((c) => c.pIdolId === pIdol.id);
+  let ownCards = allCards.filter((c) => c.pIdolId === pIdol.id && c.upgraded);
+  if (ownCards.length === 0) {
+    ownCards = allCards.filter((c) => c.pIdolId === pIdol.id);
+  }
+  const ownCard = ownCards[0] || null;
   const ownItem =
     allItems.find((p) => p.pIdolId === pIdol.id && !p.upgraded) ||
     allItems.find((p) => p.pIdolId === pIdol.id);
-  return { ownCard, ownItem };
+  return { ownCard, ownCards, ownItem };
 }
 
 function getSubOwnCards(mainPIdol, ownedSet) {
@@ -253,10 +255,12 @@ function getSubOwnCards(mainPIdol, ownedSet) {
   const subCards = [];
   const seen = new Set();
   for (const sp of subPIdols) {
-    const { ownCard } = getOwnAssets(sp);
-    if (ownCard && !seen.has(ownCard.id)) {
-      seen.add(ownCard.id);
-      subCards.push(ownCard);
+    const { ownCards } = getOwnAssets(sp);
+    for (const oc of ownCards) {
+      if (oc && !seen.has(oc.id)) {
+        seen.add(oc.id);
+        subCards.push(oc);
+      }
     }
   }
   return subCards;
@@ -574,28 +578,31 @@ async function selectTopSSR(stage, baseLoadout, topN, includeR, ownedSet, basePa
     const idolName = idolById.get(pIdol.idolId)?.name || "";
     const idolLoadout = withIdolParams(baseLoadout, idolName, baseParams, paramMode, stage);
     const templates = planTemplates.get(pIdol.plan);
-    const { ownCard, ownItem } = getOwnAssets(pIdol);
+    const { ownCards, ownItem } = getOwnAssets(pIdol);
+    const ownCardCandidates = ownCards.length > 0 ? ownCards : [null];
     const subCards = getSubOwnCards(pIdol, ownedSet);
 
     let bestScore = -Infinity;
     let bestState = null;
     let bestTplName = "";
 
-    for (const { name: tplName, state: template } of templates) {
-      const state = structuredClone(template);
-      if (ownItem) state.items[0] = ownItem.id;
-      if (ownCard) state.cards[0] = ownCard.id;
-      if (subCards.length > 0) {
-        state.cards[6] = subCards[0].id;
-      } else if (ownCard) {
-        state.cards[6] = ownCard.id;
-      }
+    for (const ownCard of ownCardCandidates) {
+      for (const { name: tplName, state: template } of templates) {
+        const state = structuredClone(template);
+        if (ownItem) state.items[0] = ownItem.id;
+        if (ownCard) state.cards[0] = ownCard.id;
+        if (subCards.length > 0) {
+          state.cards[6] = subCards[0].id;
+        } else if (ownCard) {
+          state.cards[6] = ownCard.id;
+        }
 
-      const score = (await evaluate(toLoadout(idolLoadout, state), 50)).avg;
-      if (score > bestScore) {
-        bestScore = score;
-        bestState = state;
-        bestTplName = tplName;
+        const score = (await evaluate(toLoadout(idolLoadout, state), 50)).avg;
+        if (score > bestScore) {
+          bestScore = score;
+          bestState = state;
+          bestTplName = ownCards.length > 1 && ownCard ? `${tplName} / ${ownCard.name}` : tplName;
+        }
       }
     }
 
