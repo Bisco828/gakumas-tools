@@ -661,7 +661,7 @@ async function runForStage(stageId, stageLabel, cfg) {
     const idolLoadout = withIdolParams(baseLoadout, idolName, cfg.params, paramMode, stage);
     const [vo, da, vi] = idolLoadout.params;
 
-    const { ownCard, ownItem } = getOwnAssets(pIdol);
+    const { ownCard, ownCards, ownItem } = getOwnAssets(pIdol);
     const subCardPool = getSubOwnCards(pIdol, ownedSet);
     const { cardPool, itemPool } = buildPlanPools(pIdol.plan, includeR);
     console.log(`\n▶ 本選ガチ探索: ${label} [Vo:${vo} / Da:${da} / Vi:${vi}] (サブ候補: ${subCardPool.length}種)`);
@@ -707,6 +707,60 @@ async function runForStage(stageId, stageLabel, cfg) {
         .map((id, i) => formatCardWithCustom(id, fullOptimized.customs[i + 6]))
         .join(", "),
     });
+
+    // 固有カードが2種以上あるキャラ（ガラクタロード勢）で、最適編成が両面ペアでない場合は両面版も追加算出
+    if (ownCards.length >= 2) {
+      const isAlreadyBothOwn =
+        cardById.get(fullOptimized.cards[0])?.pIdolId === pIdol.id &&
+        cardById.get(fullOptimized.cards[6])?.pIdolId === pIdol.id &&
+        fullOptimized.cards[0] !== fullOptimized.cards[6];
+
+      if (!isAlreadyBothOwn) {
+        console.log(`  ↳ 両面ガラクタロード版も追加探索: ${label}`);
+        const bothStart = structuredClone(startState);
+        bothStart.cards[0] = ownCards[0].id;
+        bothStart.customs[0] = {};
+        bothStart.cards[6] = ownCards[1].id;
+        bothStart.customs[6] = {};
+
+        const bothDeck = await optimizeDeck(
+          idolLoadout,
+          bothStart,
+          true,
+          !!ownItem,
+          cardPool,
+          itemPool,
+          [],
+          passes,
+          fastRuns
+        );
+        const bothFull = await optimizeCustomizations(
+          idolLoadout,
+          bothDeck,
+          maxCustomCards,
+          fastRuns
+        );
+        const bothStats = await evaluate(toLoadout(idolLoadout, bothFull), finalRuns);
+
+        summary.push({
+          キャラ: `${label} [両面]`,
+          サブ衣装: getSubIdolLabel(bothFull.cards[6], pIdol),
+          ステ: `${vo}/${da}/${vi}`,
+          平均スコア: bothStats.avg,
+          下振れ20: bothStats.p20,
+          上振れ90: bothStats.p90,
+          最適Pアイテム: bothFull.items.map((id) => itemById.get(id)?.name).join(", "),
+          メイン: bothFull.cards
+            .slice(0, 6)
+            .map((id, i) => formatCardWithCustom(id, bothFull.customs[i]))
+            .join(", "),
+          サブ: bothFull.cards
+            .slice(6, 12)
+            .map((id, i) => formatCardWithCustom(id, bothFull.customs[i + 6]))
+            .join(", "),
+        });
+      }
+    }
   }
 
   summary.sort((a, b) => b.平均スコア - a.平均スコア);
