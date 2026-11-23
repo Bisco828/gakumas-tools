@@ -47,8 +47,31 @@ function createSeededRng(seed) {
 const randPick = (arr, rng = Math.random) => arr[Math.floor(rng() * arr.length)];
 const isSupportCard = (card) => card?.sourceType === "support";
 
-function getMaxCustomForCard(card) {
+// カード個別の強化可能数（カスタム上限）デフォルト辞書（末尾の"+"なしでも一致）
+const DEFAULT_CUSTOM_MAX_OVERRIDES = {
+  シュプレヒコール: 1,
+  存在感: 1,
+  大胆不敵: 1,
+  一発勝負: 1,
+};
+
+function loadCustomMaxMap(configOverrides = {}) {
+  let fileOverrides = {};
+  if (existsSync("my-optimizer/custom-max.json")) {
+    try {
+      fileOverrides = JSON.parse(readFileSync("my-optimizer/custom-max.json", "utf8"));
+    } catch (e) {
+      console.warn(`  [警告] custom-max.json の読み込みに失敗しました: ${e.message}`);
+    }
+  }
+  return { ...DEFAULT_CUSTOM_MAX_OVERRIDES, ...fileOverrides, ...configOverrides };
+}
+
+function getMaxCustomForCard(card, customMaxMap = DEFAULT_CUSTOM_MAX_OVERRIDES) {
   if (!card) return 0;
+  const baseName = String(card.name || "").replace(/\+$/, "");
+  if (customMaxMap[card.name] !== undefined) return customMaxMap[card.name];
+  if (customMaxMap[baseName] !== undefined) return customMaxMap[baseName];
   if (card.rarity === "R") return 3;
   if (card.rarity === "SR") return 2;
   if (card.rarity === "SSR") return 1;
@@ -104,7 +127,8 @@ function parseCardSpec(spec, plan) {
 // templates.json の1定義から初期stateを作成（Pアイテムはランダム初期化後、自動最適化）
 function buildStateFromTemplate(tpl, plan, cardPool, itemPool, rng) {
   const items = [];
-  while (items.length < 4) {
+  let itemGuard = 0;
+  while (items.length < 4 && itemPool.length > 0 && itemGuard++ < 200) {
     const pick = randPick(itemPool, rng);
     if (!items.includes(pick.id)) items.push(pick.id);
   }
@@ -112,35 +136,41 @@ function buildStateFromTemplate(tpl, plan, cardPool, itemPool, rng) {
   const cards = [];
   const customs = [];
 
-  // メイン（スロット0はダミー、スロット1〜5がテンプレ）
-  cards.push(cardPool[0].id);
-  customs.push({});
-  for (const spec of (tpl.main || []).slice(0, 5)) {
-    const parsed = parseCardSpec(spec, plan);
-    if (parsed) {
-      cards.push(parsed.cardId);
-      customs.push(parsed.customs);
-    }
-  }
-  while (cards.length < 6) {
-    cards.push(randPick(cardPool, rng).id);
+  const fillGroup = (specs, targetLen) => {
+    cards.push(cardPool[0].id);
     customs.push({});
-  }
+    let hasSupport = false;
 
-  // サブ（スロット6はダミー、スロット7〜11がテンプレ）
-  cards.push(cardPool[0].id);
-  customs.push({});
-  for (const spec of (tpl.sub || []).slice(0, 5)) {
-    const parsed = parseCardSpec(spec, plan);
-    if (parsed) {
-      cards.push(parsed.cardId);
-      customs.push(parsed.customs);
+    for (const spec of (specs || []).slice(0, 5)) {
+      const parsed = parseCardSpec(spec, plan);
+      if (parsed) {
+        if (isSupportCard(cardById.get(parsed.cardId))) hasSupport = true;
+        cards.push(parsed.cardId);
+        customs.push(parsed.customs);
+      }
     }
-  }
-  while (cards.length < 12) {
-    cards.push(randPick(cardPool, rng).id);
-    customs.push({});
-  }
+
+    let guard = 0;
+    while (cards.length < targetLen && cardPool.length > 0 && guard++ < 500) {
+      const pick = randPick(cardPool, rng);
+      if (pick.unique && cards.includes(pick.id)) continue;
+      if (isSupportCard(pick) && hasSupport) continue;
+      if (isSupportCard(pick)) hasSupport = true;
+      cards.push(pick.id);
+      customs.push({});
+    }
+    while (cards.length < targetLen && cardPool.length > 0) {
+      const pick =
+        cardPool.find((c) => !(c.unique && cards.includes(c.id)) && (!isSupportCard(c) || !hasSupport)) ||
+        cardPool[0];
+      if (isSupportCard(pick)) hasSupport = true;
+      cards.push(pick.id);
+      customs.push({});
+    }
+  };
+
+  fillGroup(tpl.main, 6);
+  fillGroup(tpl.sub, 12);
 
   return { items, cards, customs };
 }
@@ -244,6 +274,7 @@ function getSubOwnCards(mainPIdol, ownedSet) {
     if (p.idolId !== mainPIdol.idolId) return false;
     if (p.plan !== mainPIdol.plan) return false;
     if (!p.title) return false;
+    if (p.id === mainPIdol.id) return true;
     if (p.rarity === "SSR" && ownedSet) {
       const fullLabel = `${name}【${p.title}】`;
       return ownedSet.has(String(p.id)) || ownedSet.has(fullLabel);
@@ -252,13 +283,14 @@ function getSubOwnCards(mainPIdol, ownedSet) {
   });
 
   const subCards = [];
-  const seen = new Set();
   for (const sp of subPIdols) {
-    const { ownCards } = getOwnAssets(sp);
-    for (const oc of ownCards) {
-      if (oc && !seen.has(oc.id)) {
-        seen.add(oc.id);
-        subCards.push(oc);
+    let cards = allCards.filter((c) => c.pIdolId === sp.id && c.upgraded);
+    if (cards.length === 0) {
+      cards = allCards.filter((c) => c.pIdolId === sp.id);
+    }
+    for (const c of cards) {
+      if (!subCards.some((x) => x.id === c.id)) {
+        subCards.push(c);
       }
     }
   }
@@ -298,30 +330,39 @@ function hasSupportCardInGroup(cards, slot) {
 
 function createInitialState(ownCard, subOwnCard, ownItem, cardPool, itemPool, rng = Math.random) {
   const items = ownItem ? [ownItem.id] : [];
-  while (items.length < 4) {
+  let itemGuard = 0;
+  while (items.length < 4 && itemPool.length > 0 && itemGuard++ < 200) {
     const pick = randPick(itemPool, rng);
     if (!items.includes(pick.id)) items.push(pick.id);
   }
 
   const cards = ownCard ? [ownCard.id] : [];
   let mainHasSupport = false;
-  while (cards.length < 6) {
+  let mainGuard = 0;
+  while (cards.length < 6 && cardPool.length > 0 && mainGuard++ < 500) {
     const pick = randPick(cardPool, rng);
     if (pick.unique && cards.includes(pick.id)) continue;
     if (isSupportCard(pick) && mainHasSupport) continue;
     if (isSupportCard(pick)) mainHasSupport = true;
     cards.push(pick.id);
   }
+  while (cards.length < 6 && cardPool.length > 0) {
+    cards.push(cardPool[0].id);
+  }
 
   const subFirst = subOwnCard || ownCard;
   if (subFirst) cards.push(subFirst.id);
   let subHasSupport = false;
-  while (cards.length < 12) {
+  let subGuard = 0;
+  while (cards.length < 12 && cardPool.length > 0 && subGuard++ < 500) {
     const pick = randPick(cardPool, rng);
     if (pick.unique && cards.includes(pick.id)) continue;
     if (isSupportCard(pick) && subHasSupport) continue;
     if (isSupportCard(pick)) subHasSupport = true;
     cards.push(pick.id);
+  }
+  while (cards.length < 12 && cardPool.length > 0) {
+    cards.push(cardPool[0].id);
   }
 
   const customs = Array.from({ length: 12 }, () => ({}));
@@ -423,7 +464,7 @@ async function optimizeDeck(
   return current;
 }
 
-async function optimizeCustomizations(baseLoadout, state, maxNormalCards, fastRuns) {
+async function optimizeCustomizations(baseLoadout, state, maxNormalCards, fastRuns, customMaxMap = DEFAULT_CUSTOM_MAX_OVERRIDES) {
   if (maxNormalCards <= 0) return state;
 
   let current = structuredClone(state);
@@ -452,7 +493,7 @@ async function optimizeCustomizations(baseLoadout, state, maxNormalCards, fastRu
         if (avail.length === 0) continue;
 
         const existingCount = Object.values(current.customs[slot]).reduce((a, b) => a + b, 0);
-        const cardMax = getMaxCustomForCard(card);
+        const cardMax = getMaxCustomForCard(card, customMaxMap);
         if (existingCount >= cardMax) continue;
 
         if (!isSupportCard(card) && existingCount === 0 && customizedNormalCount >= maxNormalCards) {
@@ -642,6 +683,7 @@ async function runForStage(stageId, stageLabel, cfg) {
   const finalRuns = cfg.search?.finalRuns ?? 500;
   const includeR = cfg.search?.includeR ?? false;
   const maxCustomCards = cfg.search?.maxCustomPerCard ?? 2;
+  const customMaxMap = loadCustomMaxMap(cfg.customMaxOverrides || {});
 
   let targetEntries = [];
   if (cfg.pIdolIds === "auto") {
@@ -666,9 +708,29 @@ async function runForStage(stageId, stageLabel, cfg) {
     const { cardPool, itemPool } = buildPlanPools(pIdol.plan, includeR);
     console.log(`\n▶ 本選ガチ探索: ${label} [Vo:${vo} / Da:${da} / Vi:${vi}] (サブ候補: ${subCardPool.length}種)`);
 
-    const startState =
-      presetState ||
-      createInitialState(ownCard, subCardPool[0] || ownCard, ownItem, cardPool, itemPool, createSeededRng(pIdol.id));
+    let startState = presetState;
+    if (!startState) {
+      const baseInit = createInitialState(ownCard, subCardPool[0] || ownCard, ownItem, cardPool, itemPool, createSeededRng(pIdol.id));
+      if (ownCards.length >= 2) {
+        let bestInitScore = -Infinity;
+        const subTargets = subCardPool.length > 0 ? subCardPool : ownCards;
+        for (const oc of ownCards) {
+          for (const sc of subTargets) {
+            const cand = structuredClone(baseInit);
+            cand.cards[0] = oc.id;
+            cand.cards[6] = sc.id;
+            const scAvg = (await evaluate(toLoadout(idolLoadout, cand), 30)).avg;
+            if (scAvg > bestInitScore) {
+              bestInitScore = scAvg;
+              startState = cand;
+            }
+          }
+        }
+      } else {
+        startState = baseInit;
+      }
+    }
+
     const deckOptimized = await optimizeDeck(
       idolLoadout,
       startState,
@@ -684,7 +746,8 @@ async function runForStage(stageId, stageLabel, cfg) {
       idolLoadout,
       deckOptimized,
       maxCustomCards,
-      fastRuns
+      fastRuns,
+      customMaxMap
     );
 
     const finalStats = await evaluate(toLoadout(idolLoadout, fullOptimized), finalRuns);
@@ -717,11 +780,21 @@ async function runForStage(stageId, stageLabel, cfg) {
 
       if (!isAlreadyBothOwn) {
         console.log(`  ↳ 両面ガラクタロード版も追加探索: ${label}`);
-        const bothStart = structuredClone(startState);
-        bothStart.cards[0] = ownCards[0].id;
-        bothStart.customs[0] = {};
-        bothStart.cards[6] = ownCards[1].id;
-        bothStart.customs[6] = {};
+        const pairA = structuredClone(startState);
+        pairA.cards[0] = ownCards[0].id;
+        pairA.customs[0] = {};
+        pairA.cards[6] = ownCards[1].id;
+        pairA.customs[6] = {};
+
+        const pairB = structuredClone(startState);
+        pairB.cards[0] = ownCards[1].id;
+        pairB.customs[0] = {};
+        pairB.cards[6] = ownCards[0].id;
+        pairB.customs[6] = {};
+
+        const scoreA = (await evaluate(toLoadout(idolLoadout, pairA), 50)).avg;
+        const scoreB = (await evaluate(toLoadout(idolLoadout, pairB), 50)).avg;
+        const bothStart = scoreB > scoreA ? pairB : pairA;
 
         const bothDeck = await optimizeDeck(
           idolLoadout,
@@ -738,7 +811,8 @@ async function runForStage(stageId, stageLabel, cfg) {
           idolLoadout,
           bothDeck,
           maxCustomCards,
-          fastRuns
+          fastRuns,
+          customMaxMap
         );
         const bothStats = await evaluate(toLoadout(idolLoadout, bothFull), finalRuns);
 
